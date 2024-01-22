@@ -15,6 +15,13 @@ void vApplicationStackOverflowHook(TaskHandle_t xTask, char* pcTaskName ) { whil
 
 
 void init_clock();
+void uart_setup();
+
+void uart_write(USART_TypeDef* uart, char c)
+{
+    uart->DR = c;
+    while (!(uart->SR & USART_SR_TC));
+}
 
 static void task1(void* args)
 {
@@ -23,7 +30,15 @@ static void task1(void* args)
         // Toggle LED pin
         GPIOA->ODR ^= (1 << LED_PIN);
 
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        uart_write(USART2, 'v');
+        uart_write(USART2, 'a');
+        uart_write(USART2, 'q');
+        uart_write(USART2, 'o');
+        uart_write(USART2, ' ');
+        
+        uart_write(USART2, '\n');
+
+        vTaskDelay(pdMS_TO_TICKS(500));
     }
 }
 
@@ -33,11 +48,16 @@ int main()
     
     SystemCoreClockUpdate();
 
+
     // Use system clock for following ports
     RCC->AHBENR |= (1 << RCC_AHBENR_GPIOAEN_Pos);
     // Dummy reads as per errata
     volatile uint32_t dummy= RCC->AHBENR; dummy = RCC->AHBENR;
+
+    // SysTick_Config(100000);
+    // __enable_irq();
     
+    uart_setup();
 
     GPIOA->MODER |= GPIO_MODER_MODER5_0; // enable LED
 
@@ -89,4 +109,36 @@ void init_clock()
 
         while (!(RCC->CFGR & RCC_CFGR_SWS_PLL)); // wait till system clock is set
     }
+}
+
+void uart_setup()
+{
+    volatile uint32_t dummy;
+
+    /* Enable USART2 clock */
+    // RCC->APB1ENR |= (1 << RCC_APB1ENR_USART2EN_Pos);
+    RCC->APB1ENR |= RCC_APB1ENR_USART2EN;
+    // do two dummy reads after enabling the peripheral clock, as per the errata
+    dummy = RCC->APB1ENR; dummy = RCC->APB1ENR;
+
+    /* Enable GPIOA clock*/
+    RCC->AHBENR |= (1 << RCC_AHBENR_GPIOAEN);
+    // do two dummy reads after enabling the peripheral clock, as per the errata
+    dummy = RCC->AHBENR; dummy = RCC->AHBENR;
+
+      /* Set PA2 and PA3 to alternate function */
+    GPIOA->MODER &= ~(GPIO_MODER_MODER2_Msk | GPIO_MODER_MODER3_Msk);
+    GPIOA->MODER |= (0b10 << GPIO_MODER_MODER2_Pos) | (0b10 << GPIO_MODER_MODER3_Pos);
+
+    // USART2 is AF7 (found in datasheet)
+    GPIOA->AFR[0] &= ~(GPIO_AFRL_AFSEL2_Msk | GPIO_AFRL_AFSEL3_Msk);
+    GPIOA->AFR[0] |= (7 << GPIO_AFRL_AFSEL2_Pos) | (7 << GPIO_AFRL_AFSEL3_Pos);
+
+    /* Configure and enable USART2 */
+    USART2->BRR = 278; // 115200 baud @ 32 MHz APB1 clock and 16x oversampling
+    USART2->CR1 |= (USART_CR1_UE | USART_CR1_TE); // USART enable and transmitter enable
+
+    // Dummy write, because the first byte seems to always be dropped
+    USART2->DR = 0;
+    while (!(USART2->SR & USART_SR_TC));
 }
