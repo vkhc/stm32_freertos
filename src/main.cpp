@@ -3,24 +3,61 @@
 /* Kernel includes. */
 #include "FreeRTOS.h"
 #include "task.h"
+#include "queue.h"
 
 #include <stdint.h>
 
 #define LED_PIN 5
 
-void vApplicationIdleHook(void ) { } // See configUSE_IDLE_HOOK in FreeRTOSConfig.h
-void vApplicationTickHook(void ) { } // See configUSE_TICK_HOOK	
 void vApplicationMallocFailedHook(void ) { while(true); }
 void vApplicationStackOverflowHook(TaskHandle_t xTask, char* pcTaskName ) { while(true); }
 
-
-void init_clock();
-void uart_setup();
+static QueueHandle_t uart_txq; // TX queue for UART
 
 void uart_write(USART_TypeDef* uart, char c)
 {
     uart->DR = c;
     while (!(uart->SR & USART_SR_TC));
+}
+void uart_write_nb(USART_TypeDef* uart, char c)
+{
+    uart->DR = c;
+}
+
+
+void init_clock();
+void uart_setup();
+
+static void uart_task(void*)
+{
+    char ch;
+    while (true)
+    {
+        // Receive char to be TX
+        if (xQueueReceive(uart_txq, &ch, 500) == pdPASS)
+        {
+            while (!(USART2->SR & USART_SR_TC))
+                taskYIELD() // Yield until ready
+            
+            uart_write_nb(USART2, ch);
+        }
+    }
+}
+
+static void demo_task(void*)
+{
+    while (true)
+    {
+        const char* message = "aqana maqana sad ari manqana\n";
+
+        for (const char* i = message; *i != '\0'; ++i)
+        {
+            // blocks when queue is full
+            xQueueSend(uart_txq, i, portMAX_DELAY);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
 }
 
 static void task1(void* args)
@@ -30,13 +67,14 @@ static void task1(void* args)
         // Toggle LED pin
         GPIOA->ODR ^= (1 << LED_PIN);
 
-        uart_write(USART2, 'v');
-        uart_write(USART2, 'a');
-        uart_write(USART2, 'q');
-        uart_write(USART2, 'o');
-        uart_write(USART2, ' ');
+        // uart_write(USART2, 'v');
+        // uart_write(USART2, 'a');
+        // uart_write(USART2, 'q');
+        // uart_write(USART2, 'o');
+        // uart_write(USART2, ' ');
         
-        uart_write(USART2, '\n');
+        // uart_write(USART2, '\n');
+
 
         vTaskDelay(pdMS_TO_TICKS(500));
     }
@@ -53,15 +91,16 @@ int main()
     RCC->AHBENR |= (1 << RCC_AHBENR_GPIOAEN_Pos);
     // Dummy reads as per errata
     volatile uint32_t dummy= RCC->AHBENR; dummy = RCC->AHBENR;
-
-    // SysTick_Config(100000);
-    // __enable_irq();
     
     uart_setup();
 
+    uart_txq = xQueueCreate(256, sizeof(char));
+
     GPIOA->MODER |= GPIO_MODER_MODER5_0; // enable LED
 
-    xTaskCreate(task1, "LED", 100, nullptr, configMAX_PRIORITIES - 1, nullptr);
+    xTaskCreate(uart_task, "UART", 100, nullptr, configMAX_PRIORITIES - 1, nullptr);
+    xTaskCreate(demo_task, "DEMO", 100, nullptr, configMAX_PRIORITIES - 2, nullptr);
+    xTaskCreate(task1, "LED", 100, nullptr, configMAX_PRIORITIES - 3, nullptr);
     vTaskStartScheduler();
 
 
@@ -135,10 +174,6 @@ void uart_setup()
     GPIOA->AFR[0] |= (7 << GPIO_AFRL_AFSEL2_Pos) | (7 << GPIO_AFRL_AFSEL3_Pos);
 
     /* Configure and enable USART2 */
-    USART2->BRR = 278; // 115200 baud @ 32 MHz APB1 clock and 16x oversampling
+    USART2->BRR = 277; // 115200 baud @ 32 MHz APB1 clock and 16x oversampling
     USART2->CR1 |= (USART_CR1_UE | USART_CR1_TE); // USART enable and transmitter enable
-
-    // Dummy write, because the first byte seems to always be dropped
-    USART2->DR = 0;
-    while (!(USART2->SR & USART_SR_TC));
 }
